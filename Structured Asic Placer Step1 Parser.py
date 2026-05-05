@@ -7,6 +7,21 @@ MASTER_TILE = [
 ]
 
 
+def get_site_type(x, y):
+    small_x = (x - 1) % 5
+    small_y = (y - 1) % 5
+    return MASTER_TILE[small_y][small_x]
+
+
+def test_master_tile():
+    print("Master tile test")
+    print("Site at x=1, y=1 is", get_site_type(1, 1))
+    print("Site at x=2, y=1 is", get_site_type(2, 1))
+    print("Site at x=4, y=1 is", get_site_type(4, 1))
+    print("Site at x=3, y=3 is", get_site_type(3, 3))
+    print("Site at x=6, y=1 is", get_site_type(6, 1))
+
+
 def read_file(filename):
     file = open(filename, "r")
     lines = file.readlines()
@@ -85,6 +100,9 @@ def read_nets(lines, start, num_nets):
 
 
 def main():
+    test_master_tile()
+    print()
+
     lines = read_file("design_1_small.txt")
 
     num_components, num_nets, rows, cols, num_pins = read_header(lines[0])
