@@ -237,10 +237,10 @@ def run_sa_demo(placement, cells, nets, pins, rows, cols):
                 current_placement = new_placement
                 current_cost = new_cost
             else:
-                chance = math.exp(-cost_change / temperature)
+                accept_probability = math.exp(-cost_change / temperature)
                 random_number = random.random()
 
-                if random_number < chance:
+                if random_number < accept_probability:
                     current_placement = new_placement
                     current_cost = new_cost
 
