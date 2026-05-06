@@ -1,5 +1,6 @@
 import random
 import math
+
 MASTER_TILE = [
     ["T0", "T1", "T0", "T2", "T0"],
     ["T1", "T0", "T1", "T0", "T1"],
@@ -13,6 +14,7 @@ def get_site_type(x, y):
     small_x = (x - 1) % 5
     small_y = (y - 1) % 5
     return MASTER_TILE[small_y][small_x]
+
 
 def make_legal_sites(rows, cols):
     legal_sites = {
@@ -29,37 +31,64 @@ def make_legal_sites(rows, cols):
 
     return legal_sites
 
-def make_initial_placement(cells, legal_sites):
+
+def is_cell_position_legal(rows, cols, cell_type, position):
+    x = position[0]
+    y = position[1]
+
+    if x == 0 or x == cols - 1 or y == 0 or y == rows - 1:
+        return False
+
+    actual_site_type = get_site_type(x, y)
+
+    if cell_type != actual_site_type:
+        return False
+
+    return True
+
+
+def make_initial_placement(cells, legal_sites, rows, cols):
     placement = {}
 
-    random.shuffle(legal_sites["T0"])
-    random.shuffle(legal_sites["T1"])
-    random.shuffle(legal_sites["T2"])
-    random.shuffle(legal_sites["T3"])
-
-    used_count = {
-        "T0": 0,
-        "T1": 0,
-        "T2": 0,
-        "T3": 0
+    available_sites = {
+        "T0": legal_sites["T0"].copy(),
+        "T1": legal_sites["T1"].copy(),
+        "T2": legal_sites["T2"].copy(),
+        "T3": legal_sites["T3"].copy()
     }
+
     for cell_id in cells:
         cell_type = cells[cell_id]
 
-        site_number = used_count[cell_type]
-        position = legal_sites[cell_type][site_number]
+        placed = False
 
-        placement[cell_id] = position
+        while placed == False:
+            random_site = random.choice(available_sites[cell_type])
 
-        used_count[cell_type] = used_count[cell_type] + 1
+            if is_cell_position_legal(rows, cols, cell_type, random_site):
+                placement[cell_id] = random_site
+                available_sites[cell_type].remove(random_site)
+                placed = True
 
     return placement
+
+
+def build_site_to_cell(placement):
+    site_to_cell = {}
+
+    for cell_id in placement:
+        position = placement[cell_id]
+        site_to_cell[tuple(position)] = cell_id
+
+    return site_to_cell
+
 
 def get_component_position(component_id, pins, placement):
     if component_id in pins:
         return pins[component_id]
 
     return placement[component_id]
+
 
 def calculate_net_hpwl(net, pins, placement):
     x_values = []
@@ -87,11 +116,25 @@ def calculate_net_hpwl(net, pins, placement):
 
     return hpwl
 
+
+def calculate_affected_hpwl(nets, pins, placement, affected_net_ids):
+    total = 0
+
+    for net_id in affected_net_ids:
+        net = nets[net_id]
+        total = total + calculate_net_hpwl(net, pins, placement)
+
+    return total
+
+
 def calculate_total_hpwl(nets, pins, placement):
     total = 0
+
     for net in nets:
-        total += calculate_net_hpwl(net, pins, placement)
+        total = total + calculate_net_hpwl(net, pins, placement)
+
     return total
+
 
 def read_file(filename):
     file = open(filename, "r")
@@ -155,86 +198,102 @@ def read_cells(lines, start, num_cells):
 
 def read_nets(lines, start, num_nets):
     nets = []
+    component_to_nets = {}
 
-    for i in range(num_nets):
-        line = lines[start + i]
+    for net_index in range(num_nets):
+        line = lines[start + net_index]
         parts = line.split()
 
         net = []
 
         for j in range(1, len(parts)):
-            net.append(int(parts[j]))
+            component_id = int(parts[j])
+            net.append(component_id)
+
+            if component_id not in component_to_nets:
+                component_to_nets[component_id] = []
+
+            component_to_nets[component_id].append(net_index)
 
         nets.append(net)
 
-    return nets
+    return nets, component_to_nets
 
-def check_placement_is_legal(rows, cols, pins, cells, placement):
-    for pin_id in pins:
-        x = pins[pin_id][0]
-        y = pins[pin_id][1]
 
-        if x != 0 and x != cols - 1 and y != 0 and y != rows - 1:
-            return False
+def make_random_move_or_swap(placement, cells, legal_sites, site_to_cell):
+    new_placement = placement.copy()
+    new_site_to_cell = site_to_cell.copy()
 
-    for cell_id in cells:
-        x = placement[cell_id][0]
-        y = placement[cell_id][1]
-
-        if x == 0 or x == cols - 1 or y == 0 or y == rows - 1:
-            return False
-
-        correct_type = cells[cell_id]
-        actual_site_type = get_site_type(x, y)
-
-        if correct_type != actual_site_type:
-            return False
-
-    return True
-
-def make_random_same_type_swap(placement, cells):
-    cell_ids = list(cells.keys())
-
-    first_cell = random.choice(cell_ids)
+    first_cell = random.choice(list(cells.keys()))
     first_type = cells[first_cell]
 
-    same_type_cells = []
+    random_site = random.choice(legal_sites[first_type])
+    random_site_key = tuple(random_site)
 
-    for cell_id in cell_ids:
-        if cells[cell_id] == first_type and cell_id != first_cell:
-            same_type_cells.append(cell_id)
+    old_position = new_placement[first_cell]
+    old_position_key = tuple(old_position)
 
-    second_cell = random.choice(same_type_cells)
+    cell_on_site = new_site_to_cell.get(random_site_key)
 
-    new_placement = placement.copy()
+    if random_site == old_position:
+        return new_placement, new_site_to_cell, [first_cell]
 
-    first_position = new_placement[first_cell]
-    second_position = new_placement[second_cell]
+    if cell_on_site != None:
+        new_placement[first_cell] = random_site
+        new_placement[cell_on_site] = old_position
 
-    new_placement[first_cell] = second_position
-    new_placement[second_cell] = first_position
+        new_site_to_cell[random_site_key] = first_cell
+        new_site_to_cell[old_position_key] = cell_on_site
 
-    return new_placement
+        changed_cells = [first_cell, cell_on_site]
+    else:
+        new_placement[first_cell] = random_site
 
-def run_sa_demo(placement, cells, nets, pins, rows, cols):
+        del new_site_to_cell[old_position_key]
+        new_site_to_cell[random_site_key] = first_cell
+
+        changed_cells = [first_cell]
+
+    return new_placement, new_site_to_cell, changed_cells
+
+
+def run_sa_demo(placement, cells, nets, pins, rows, cols, legal_sites, component_to_nets, total_hpwl, site_to_cell):
     current_placement = placement
-    initial_cost = calculate_total_hpwl(nets, pins, current_placement)
+    current_site_to_cell = site_to_cell
 
+    initial_cost = total_hpwl
     current_cost = initial_cost
 
     best_placement = current_placement
     best_cost = initial_cost
 
-    temperature = 500*initial_cost
-    while temperature > (5 * 10**-5 * initial_cost) / len(nets):
+    temperature = 500 * initial_cost
+    final_temperature = (5 * 10**-5 * initial_cost) / len(nets)
+
+    while temperature > final_temperature:
         for iteration in range(1, 20 * len(cells)):
-            new_placement = make_random_same_type_swap(current_placement, cells)
-            new_cost = calculate_total_hpwl(nets, pins, new_placement)
+
+            new_placement, new_site_to_cell, changed_cells = make_random_move_or_swap(
+                current_placement, cells, legal_sites, current_site_to_cell
+            )
+
+            affected_net_ids = set()
+
+            for cell_id in changed_cells:
+                if cell_id in component_to_nets:
+                    for net_id in component_to_nets[cell_id]:
+                        affected_net_ids.add(net_id)
+
+            old_affected_cost = calculate_affected_hpwl(nets, pins, current_placement, affected_net_ids)
+            new_affected_cost = calculate_affected_hpwl(nets, pins, new_placement, affected_net_ids)
+
+            new_cost = current_cost - old_affected_cost + new_affected_cost
 
             cost_change = new_cost - current_cost
 
             if cost_change < 0:
                 current_placement = new_placement
+                current_site_to_cell = new_site_to_cell
                 current_cost = new_cost
             else:
                 accept_probability = math.exp(-cost_change / temperature)
@@ -242,28 +301,20 @@ def run_sa_demo(placement, cells, nets, pins, rows, cols):
 
                 if random_number < accept_probability:
                     current_placement = new_placement
+                    current_site_to_cell = new_site_to_cell
                     current_cost = new_cost
 
             if current_cost < best_cost:
                 best_placement = current_placement
                 best_cost = current_cost
 
-
-            is_legal = check_placement_is_legal(rows, cols, pins, cells, best_placement)
-            print("Temperature", temperature)
-            print("Iteration:", iteration)
-            print("Current HPWL:", current_cost)
-            print("Best HPWL:", best_cost)
-            print("Placement legal:", is_legal)
-            print()
-
         temperature = temperature * 0.95
 
     return best_placement, best_cost
 
-def main():
 
-    lines = read_file("design_1_small.txt")
+def main():
+    lines = read_file("design_4_dense.txt")
 
     num_components, num_nets, rows, cols, num_pins = read_header(lines[0])
 
@@ -272,24 +323,28 @@ def main():
     num_cells = num_components - num_pins
     cells, next_line = read_cells(lines, next_line, num_cells)
 
-    nets = read_nets(lines, next_line, num_nets)
+    nets, component_to_nets = read_nets(lines, next_line, num_nets)
 
     legal_sites = make_legal_sites(rows, cols)
 
-    placement = make_initial_placement(cells, legal_sites)
+    placement = make_initial_placement(cells, legal_sites, rows, cols)
 
-    is_legal = check_placement_is_legal(rows, cols, pins, cells, placement)
+    site_to_cell = build_site_to_cell(placement)
 
     total_hpwl = calculate_total_hpwl(nets, pins, placement)
 
-    new_placement = make_random_same_type_swap(placement, cells)
-
-    new_total_hpwl = calculate_total_hpwl(nets, pins, new_placement)
-
-    new_is_legal = check_placement_is_legal(rows, cols, pins, cells, new_placement)
-
-    best_placement, best_cost = run_sa_demo(placement, cells, nets, pins, rows, cols)
-
+    best_placement, best_cost = run_sa_demo(
+        placement,
+        cells,
+        nets,
+        pins,
+        rows,
+        cols,
+        legal_sites,
+        component_to_nets,
+        total_hpwl,
+        site_to_cell
+    )
 
     print("File read successfully")
     print("Number of components:", num_components)
@@ -302,10 +357,7 @@ def main():
     print("First cell after pins:", cells[num_pins])
     print("First net:", nets[0])
     print("Total hpwl:", total_hpwl)
-    print("Initial placement legal:", is_legal)
-    print("After one swap HPWL:", new_total_hpwl)
-    print("After one swap legal:", new_is_legal)
     print("Final demo best HPWL:", best_cost)
-    print("Final demo placement legal:", check_placement_is_legal(rows, cols, pins, cells, best_placement))
+
 
 main()
