@@ -314,7 +314,7 @@ def run_sa_demo(placement, cells, nets, pins, rows, cols, legal_sites, component
 
 
 def main():
-    lines = read_file("design_4_dense.txt")
+    lines = read_file("design_1_small.txt")
 
     num_components, num_nets, rows, cols, num_pins = read_header(lines[0])
 
