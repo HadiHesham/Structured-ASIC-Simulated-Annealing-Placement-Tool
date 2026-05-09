@@ -1,332 +1,388 @@
-import random
-import math
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <string>
+#include <map>
+#include <random>
+#include <cmath>
+#include <algorithm>
 
-MASTER_TILE = [
-    ["T0", "T1", "T0", "T2", "T0"],
-    ["T1", "T0", "T1", "T0", "T1"],
-    ["T0", "T2", "T3", "T0", "T2"],
-    ["T1", "T0", "T1", "T0", "T0"],
-    ["T0", "T0", "T0", "T0", "T0"],
-]
+using namespace std;
 
+mt19937 rng(random_device{}());
 
-def get_site_type(x, y):
-    small_x = (x - 1) % 5
-    small_y = (y - 1) % 5
-    return MASTER_TILE[small_y][small_x]
+int num_components;
+int num_nets;
+int rows;
+int cols;
+int num_pins;
+int num_cells;
 
+int MASTER_TILE[5][5] = {
+    {0, 1, 0, 2, 0},
+    {1, 0, 1, 0, 1},
+    {0, 2, 3, 0, 2},
+    {1, 0, 1, 0, 0},
+    {0, 0, 0, 0, 0}
+};
 
-def make_legal_sites(rows, cols):
-    legal_sites = {
-        "T0": [],
-        "T1": [],
-        "T2": [],
-        "T3": []
+map<int, pair<int, int>> placement;
+map<int, int> cell_type;
+vector<int> cell_ids;
+
+map<int, vector<int>> nets;
+map<int, vector<int>> component_to_nets;
+
+vector<pair<int, int>> legal_sites[4];
+
+map<pair<int, int>, int> site_to_cell;
+
+int get_random_index(int size) {
+    return rng() % size;
+}
+
+int get_site_type(int x, int y) {
+    int small_x = (x - 1) % 5;
+    int small_y = (y - 1) % 5;
+
+    return MASTER_TILE[small_y][small_x];
+}
+
+void read_input_file(string filename) {
+    ifstream file(filename);
+
+    file >> num_components;
+    file >> num_nets;
+    file >> rows;
+    file >> cols;
+    file >> num_pins;
+
+    for (int i = 0; i < num_pins; i++) {
+        int pin_id;
+        int x;
+        int y;
+        string p;
+
+        file >> pin_id;
+        file >> x;
+        file >> y;
+        file >> p;
+
+        placement[pin_id] = {x, y};
     }
 
-    for y in range(1, rows - 1):
-        for x in range(1, cols - 1):
-            cell_type = get_site_type(x, y)
-            legal_sites[cell_type].append((x, y))
+    num_cells = num_components - num_pins;
 
-    return legal_sites
+    for (int i = 0; i < num_cells; i++) {
+        int cell_id;
+        string type_string;
 
+        file >> cell_id;
+        file >> type_string;
 
-def is_cell_position_legal(rows, cols, cell_type, position):
-    x = position[0]
-    y = position[1]
+        int type = type_string[1] - '0';
 
-    if x == 0 or x == cols - 1 or y == 0 or y == rows - 1:
-        return False
-
-    actual_site_type = get_site_type(x, y)
-
-    if cell_type != actual_site_type:
-        return False
-
-    return True
-
-
-def make_initial_placement(cells, legal_sites, rows, cols):
-    placement = {}
-
-    available_sites = {
-        "T0": legal_sites["T0"].copy(),
-        "T1": legal_sites["T1"].copy(),
-        "T2": legal_sites["T2"].copy(),
-        "T3": legal_sites["T3"].copy()
+        cell_type[cell_id] = type;
+        cell_ids.push_back(cell_id);
     }
 
-    for cell_id in cells:
-        cell_type = cells[cell_id]
+    for (int net_id = 0; net_id < num_nets; net_id++) {
+        int count;
+        file >> count;
 
-        placed = False
+        for (int j = 0; j < count; j++) {
+            int component_id;
+            file >> component_id;
 
-        while placed == False:
-            random_site = random.choice(available_sites[cell_type])
-            placement[cell_id] = tuple(random_site)
-            available_sites[cell_type].remove(random_site)
-            placed = True
+            nets[net_id].push_back(component_id);
+            component_to_nets[component_id].push_back(net_id);
+        }
+    }
 
-    return placement
+    file.close();
+}
 
+void make_legal_sites() {
+    for (int y = 1; y < rows - 1; y++) {
+        for (int x = 1; x < cols - 1; x++) {
+            int type = get_site_type(x, y);
+            legal_sites[type].push_back({x, y});
+        }
+    }
+}
 
-def build_site_to_cell(placement):
-    site_to_cell = {}
+void make_initial_placement() {
+    vector<pair<int, int>> available_sites[4];
 
-    for cell_id in placement:
-        position = placement[cell_id]
-        site_to_cell[tuple(position)] = cell_id
+    for (int type = 0; type < 4; type++) {
+        available_sites[type] = legal_sites[type];
 
-    return site_to_cell
+        shuffle(
+            available_sites[type].begin(),
+            available_sites[type].end(),
+            rng
+        );
+    }
 
+    int used_count[4] = {0, 0, 0, 0};
 
-def calculate_net_hpwl(net, placement):
-    x, y = placement[net[0]]
-    smallest_x = biggest_x = x
-    smallest_y = biggest_y = y
+    for (int cell_id : cell_ids) {
+        int type = cell_type[cell_id];
 
-    for i in range(1, len(net)):
-        x, y = placement[net[i]]
+        int site_number = used_count[type];
 
-        if x < smallest_x:
-            smallest_x = x
-        if x > biggest_x:
-            biggest_x = x
-        if y < smallest_y:
-            smallest_y = y
-        if y > biggest_y:
-            biggest_y = y
+        placement[cell_id] = available_sites[type][site_number];
 
-    return (biggest_x - smallest_x) + (biggest_y - smallest_y)
+        used_count[type]++;
+    }
+}
 
-    return hpwl
+void build_site_to_cell() {
+    site_to_cell.clear();
+
+    for (int cell_id : cell_ids) {
+        pair<int, int> position = placement[cell_id];
+
+        site_to_cell[position] = cell_id;
+    }
+}
+
+int calculate_net_hpwl(int net_id) {
+    int first_component = nets[net_id][0];
+
+    int x = placement[first_component].first;
+    int y = placement[first_component].second;
+
+    int smallest_x = x;
+    int biggest_x = x;
+    int smallest_y = y;
+    int biggest_y = y;
+
+    for (int i = 1; i < nets[net_id].size(); i++) {
+        int component_id = nets[net_id][i];
+
+        x = placement[component_id].first;
+        y = placement[component_id].second;
+
+        if (x < smallest_x) {
+            smallest_x = x;
+        }
+
+        if (x > biggest_x) {
+            biggest_x = x;
+        }
+
+        if (y < smallest_y) {
+            smallest_y = y;
+        }
+
+        if (y > biggest_y) {
+            biggest_y = y;
+        }
+    }
+
+    return biggest_x - smallest_x + biggest_y - smallest_y;
+}
+
+int calculate_total_hpwl() {
+    int total = 0;
+
+    for (int net_id = 0; net_id < num_nets; net_id++) {
+        total = total + calculate_net_hpwl(net_id);
+    }
+
+    return total;
+}
+
+void add_unique(vector<int>& values, int new_value) {
+    for (int value : values) {
+        if (value == new_value) {
+            return;
+        }
+    }
+
+    values.push_back(new_value);
+}
+
+vector<int> get_affected_net_ids(vector<int>& changed_cells) {
+    vector<int> affected_net_ids;
+
+    for (int cell_id : changed_cells) {
+        for (int net_id : component_to_nets[cell_id]) {
+            add_unique(affected_net_ids, net_id);
+        }
+    }
+
+    return affected_net_ids;
+}
+
+int calculate_affected_hpwl(vector<int>& affected_net_ids) {
+    int total = 0;
+
+    for (int net_id : affected_net_ids) {
+        total = total + calculate_net_hpwl(net_id);
+    }
+
+    return total;
+}
+
+void apply_move(
+    int first_cell,
+    pair<int, int> old_pos,
+    pair<int, int> new_pos,
+    int cell_on_site
+) {
+    placement[first_cell] = new_pos;
+    site_to_cell[new_pos] = first_cell;
+
+    if (cell_on_site != -1) {
+        placement[cell_on_site] = old_pos;
+        site_to_cell[old_pos] = cell_on_site;
+    } else {
+        site_to_cell.erase(old_pos);
+    }
+}
+
+void undo_move(
+    int first_cell,
+    pair<int, int> old_pos,
+    pair<int, int> new_pos,
+    int cell_on_site
+) {
+    apply_move(
+        first_cell,
+        new_pos,
+        old_pos,
+        cell_on_site
+    );
+}
+
+void pick_move(
+    int& first_cell,
+    pair<int, int>& old_pos,
+    pair<int, int>& new_pos,
+    int& cell_on_site
+) {
+    int random_cell_index = get_random_index(cell_ids.size());
+
+    first_cell = cell_ids[random_cell_index];
+
+    int type = cell_type[first_cell];
+
+    int random_site_index = get_random_index(legal_sites[type].size());
 
+    new_pos = legal_sites[type][random_site_index];
 
-def calculate_affected_hpwl(nets, pins, placement, affected_net_ids):
-    total = 0
+    old_pos = placement[first_cell];
 
-    for net_id in affected_net_ids:
-        net = nets[net_id]
-        total = total + calculate_net_hpwl(net, placement)
-
-    return total
-
-
-def calculate_total_hpwl(nets, pins, placement):
-    total = 0
-
-    for net in nets:
-        total = total + calculate_net_hpwl(net, placement)
-
-    return total
-
-
-def read_file(filename):
-    file = open(filename, "r")
-    lines = file.readlines()
-    file.close()
-
-    clean_lines = []
-
-    for line in lines:
-        line = line.strip()
-        if line != "":
-            clean_lines.append(line)
-
-    return clean_lines
-
-
-def read_header(first_line):
-    parts = first_line.split()
-
-    num_components = int(parts[0])
-    num_nets = int(parts[1])
-    rows = int(parts[2])
-    cols = int(parts[3])
-    num_pins = int(parts[4])
-
-    return num_components, num_nets, rows, cols, num_pins
-
-
-def read_pins(lines, start, num_pins):
-    pins = {}
-
-    for i in range(num_pins):
-        line = lines[start + i]
-        parts = line.split()
-
-        pin_id = int(parts[0])
-        x = int(parts[1])
-        y = int(parts[2])
-
-        pins[pin_id] = [x, y]
-
-    next_line = start + num_pins
-    return pins, next_line
-
-
-def read_cells(lines, start, num_cells):
-    cells = {}
-
-    for i in range(num_cells):
-        line = lines[start + i]
-        parts = line.split()
-
-        cell_id = int(parts[0])
-        cell_type = parts[1]
-
-        cells[cell_id] = cell_type
-
-    next_line = start + num_cells
-    return cells, next_line
-
-
-def read_nets(lines, start, num_nets):
-    nets = []
-    component_to_nets = {}
-
-    for net_index in range(num_nets):
-        line = lines[start + net_index]
-        parts = line.split()
-
-        net = []
-
-        for j in range(1, len(parts)):
-            component_id = int(parts[j])
-            net.append(component_id)
-
-            if component_id not in component_to_nets:
-                component_to_nets[component_id] = []
-
-            component_to_nets[component_id].append(net_index)
-
-        nets.append(net)
-
-    return nets, component_to_nets
-
-
-def apply_move(placement, site_to_cell, first_cell, old_pos, new_pos, cell_on_site):
-    placement[first_cell] = new_pos
-
-    site_to_cell[tuple(new_pos)] = first_cell
-
-    if cell_on_site is not None:
-        placement[cell_on_site] = old_pos
-        site_to_cell[tuple(old_pos)] = cell_on_site
-    else:
-        del site_to_cell[tuple(old_pos)]
-
-def undo_move(placement, site_to_cell, first_cell, old_pos, new_pos, cell_on_site):
-    apply_move(placement, site_to_cell, first_cell, new_pos, old_pos, cell_on_site)
-
-
-def pick_move(placement, cells, legal_sites, site_to_cell, cell_ids):
-    first_cell = random.choice(cell_ids)
-
-    first_type = cells[first_cell]
-    sites = legal_sites[first_type]
-    new_pos = sites[random.randint(0, len(sites) - 1)]
-
-    old_pos = placement[first_cell]
-
-    cell_on_site = site_to_cell.get(tuple(new_pos))
-
-    return first_cell, old_pos, new_pos, cell_on_site
-
-
-def run_sa_demo(placement, cells, nets, pins, rows, cols, legal_sites, component_to_nets, total_hpwl, site_to_cell, cell_ids):
-    current_placement = placement
-    current_site_to_cell = site_to_cell
-
-    initial_cost = total_hpwl
-    current_cost = initial_cost
-
-    best_placement = current_placement
-    best_cost = initial_cost
-
-    temperature = 500 * initial_cost
-    final_temperature = (5 * 10**-5 * initial_cost) / len(nets)
-
-    while temperature > final_temperature:
-        for iteration in range(1, 20 * len(cells)):
-
-            first_cell, old_pos, new_pos, cell_on_site = pick_move(
-                current_placement, cells, legal_sites, current_site_to_cell, cell_ids
-            )
-
-            changed_cells = [first_cell] if cell_on_site is None else [first_cell, cell_on_site]
-
-            affected_net_ids = set()
-            for cell_id in changed_cells:
-                if cell_id in component_to_nets:
-                    for net_id in component_to_nets[cell_id]:
-                        affected_net_ids.add(net_id)
-
-            old_affected_cost = calculate_affected_hpwl(nets, pins, current_placement, affected_net_ids)
-
-            apply_move(current_placement, current_site_to_cell, first_cell, old_pos, new_pos, cell_on_site)
-
-            new_affected_cost = calculate_affected_hpwl(nets, pins, current_placement, affected_net_ids)
-
-            new_cost = current_cost - old_affected_cost + new_affected_cost
-            cost_change = new_cost - current_cost
-
-            if cost_change < 0 or random.random() < math.exp(-cost_change / temperature):
-                current_cost = new_cost
-            else:
-                undo_move(current_placement, current_site_to_cell, first_cell, old_pos, new_pos, cell_on_site)
-
-            if current_cost < best_cost:
-                best_placement = current_placement.copy()
-                best_cost = current_cost
-
-        temperature = temperature * 0.95
-
-    return best_placement, best_cost
-
-
-def main():
-    lines = read_file("design_5_extreme.txt")
-
-    num_components, num_nets, rows, cols, num_pins = read_header(lines[0])
-
-    pins, next_line = read_pins(lines, 1, num_pins)
-
-    num_cells = num_components - num_pins
-
-    cells, next_line = read_cells(lines, next_line, num_cells)
-
-    cell_ids = list(cells.keys())
-
-    nets, component_to_nets = read_nets(lines, next_line, num_nets)
-
-    legal_sites = make_legal_sites(rows, cols)
-
-    placement = make_initial_placement(cells, legal_sites, rows, cols)
-
-    site_to_cell = build_site_to_cell(placement)
-
-    for pin_id in pins:
-        placement[pin_id] = pins[pin_id]
-
-    total_hpwl = calculate_total_hpwl(nets, pins, placement)
-
-    best_placement, best_cost = run_sa_demo(
-        placement,
-        cells,
-        nets,
-        pins,
-        rows,
-        cols,
-        legal_sites,
-        component_to_nets,
-        total_hpwl,
-        site_to_cell,
-        cell_ids
-    )
-    print("Total hpwl:", total_hpwl)
-    print("Final demo best HPWL:", best_cost)
-
-
-main()
+    if (site_to_cell.count(new_pos)) {
+        cell_on_site = site_to_cell[new_pos];
+    } else {
+        cell_on_site = -1;
+    }
+}
+
+int run_sa(int total_hpwl) {
+    int current_cost = total_hpwl;
+    int best_cost = current_cost;
+
+    double temperature = 500.0 * total_hpwl;
+    double final_temperature = (5e-5 * total_hpwl) / num_nets;
+
+    uniform_real_distribution<double> probability(0.0, 1.0);
+
+    while (temperature > final_temperature) {
+        int moves_per_temperature = 20 * num_cells;
+
+        for (int iteration = 0; iteration < moves_per_temperature; iteration++) {
+            int first_cell;
+            pair<int, int> old_pos;
+            pair<int, int> new_pos;
+            int cell_on_site;
+
+            pick_move(
+                first_cell,
+                old_pos,
+                new_pos,
+                cell_on_site
+            );
+
+            if (new_pos == old_pos) {
+                continue;
+            }
+
+            vector<int> changed_cells;
+
+            changed_cells.push_back(first_cell);
+
+            if (cell_on_site != -1) {
+                changed_cells.push_back(cell_on_site);
+            }
+
+            vector<int> affected_net_ids = get_affected_net_ids(changed_cells);
+
+            int old_affected_cost = calculate_affected_hpwl(affected_net_ids);
+
+            apply_move(
+                first_cell,
+                old_pos,
+                new_pos,
+                cell_on_site
+            );
+
+            int new_affected_cost = calculate_affected_hpwl(affected_net_ids);
+
+            int new_cost = current_cost - old_affected_cost + new_affected_cost;
+
+            int cost_change = new_cost - current_cost;
+
+            if (cost_change < 0 || probability(rng) < exp(-cost_change / temperature)) {
+                current_cost = new_cost;
+            } else {
+                undo_move(
+                    first_cell,
+                    old_pos,
+                    new_pos,
+                    cell_on_site
+                );
+            }
+
+            if (current_cost < best_cost) {
+                best_cost = current_cost;
+            }
+        }
+
+        temperature = temperature * 0.95;
+    }
+
+    return best_cost;
+}
+
+int main() {
+    string filename = "design_5_extreme.txt";
+
+    read_input_file(filename);
+
+    make_legal_sites();
+
+    make_initial_placement();
+
+    build_site_to_cell();
+
+    int total_hpwl = calculate_total_hpwl();
+
+    int best_cost = run_sa(total_hpwl);
+
+    cout << "File read successfully" << endl;
+    cout << "Input file: " << filename << endl;
+    cout << "Number of components: " << num_components << endl;
+    cout << "Number of nets: " << num_nets << endl;
+    cout << "Grid rows: " << rows << endl;
+    cout << "Grid cols: " << cols << endl;
+    cout << "Number of pins: " << num_pins << endl;
+    cout << "Number of movable cells: " << num_cells << endl;
+    cout << "Initial total HPWL: " << total_hpwl << endl;
+    cout << "Final best HPWL: " << best_cost << endl;
+
+    return 0;
+}
