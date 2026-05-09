@@ -76,17 +76,17 @@ def build_site_to_cell(placement):
 
     for cell_id in placement:
         position = placement[cell_id]
-        site_to_cell[tuple(position)] = cell_id
+        site_to_cell[position] = cell_id
 
     return site_to_cell
 
 
-def calculate_net_hpwl(net, placement):
+def calculate_net_hpwl(net, net_length, placement):
     x, y = placement[net[0]]
     smallest_x = biggest_x = x
     smallest_y = biggest_y = y
 
-    for i in range(1, len(net)):
+    for i in range(1, net_length):
         x, y = placement[net[i]]
 
         if x < smallest_x:
@@ -100,24 +100,21 @@ def calculate_net_hpwl(net, placement):
 
     return (biggest_x - smallest_x) + (biggest_y - smallest_y)
 
-    return hpwl
 
-
-def calculate_affected_hpwl(nets, pins, placement, affected_net_ids):
+def calculate_affected_hpwl(nets, net_lengths, placement, affected_net_ids):
     total = 0
 
     for net_id in affected_net_ids:
-        net = nets[net_id]
-        total = total + calculate_net_hpwl(net, placement)
+        total = total + calculate_net_hpwl(nets[net_id], net_lengths[net_id], placement)
 
     return total
 
 
-def calculate_total_hpwl(nets, pins, placement):
+def calculate_total_hpwl(nets, net_lengths, placement):
     total = 0
 
-    for net in nets:
-        total = total + calculate_net_hpwl(net, placement)
+    for i, net in enumerate(nets):
+        total = total + calculate_net_hpwl(net, net_lengths[i], placement)
 
     return total
 
@@ -160,7 +157,7 @@ def read_pins(lines, start, num_pins):
         x = int(parts[1])
         y = int(parts[2])
 
-        pins[pin_id] = [x, y]
+        pins[pin_id] = (x, y)
 
     next_line = start + num_pins
     return pins, next_line
@@ -208,34 +205,53 @@ def read_nets(lines, start, num_nets):
 
 def apply_move(placement, site_to_cell, first_cell, old_pos, new_pos, cell_on_site):
     placement[first_cell] = new_pos
-
-    site_to_cell[tuple(new_pos)] = first_cell
+    site_to_cell[new_pos] = first_cell
 
     if cell_on_site is not None:
         placement[cell_on_site] = old_pos
-        site_to_cell[tuple(old_pos)] = cell_on_site
+        site_to_cell[old_pos] = cell_on_site
     else:
-        del site_to_cell[tuple(old_pos)]
+        del site_to_cell[old_pos]
+
 
 def undo_move(placement, site_to_cell, first_cell, old_pos, new_pos, cell_on_site):
     apply_move(placement, site_to_cell, first_cell, new_pos, old_pos, cell_on_site)
 
 
-def pick_move(placement, cells, legal_sites, site_to_cell, cell_ids):
-    first_cell = random.choice(cell_ids)
+def calculate_cell_costs(cell_ids, component_to_nets, nets, net_lengths, placement):
+    cell_costs = {}
+
+    for cell_id in cell_ids:
+        total = 0
+        if cell_id in component_to_nets:
+            for net_id in component_to_nets[cell_id]:
+                total = total + calculate_net_hpwl(nets[net_id], net_lengths[net_id], placement)
+        cell_costs[cell_id] = total
+
+    return cell_costs
+
+
+def pick_move(placement, cells, legal_sites, site_to_cell, cell_ids, cell_costs, total_cost):
+    random_value = random.uniform(0, total_cost)
+
+    first_cell = cell_ids[-1]
+    cumulative = 0
+    for cell_id in cell_ids:
+        cumulative += cell_costs[cell_id]
+        if cumulative >= random_value:
+            first_cell = cell_id
+            break
 
     first_type = cells[first_cell]
     sites = legal_sites[first_type]
     new_pos = sites[random.randint(0, len(sites) - 1)]
-
     old_pos = placement[first_cell]
-
-    cell_on_site = site_to_cell.get(tuple(new_pos))
+    cell_on_site = site_to_cell.get(new_pos)
 
     return first_cell, old_pos, new_pos, cell_on_site
 
 
-def run_sa_demo(placement, cells, nets, pins, rows, cols, legal_sites, component_to_nets, total_hpwl, site_to_cell, cell_ids):
+def run_sa_demo(placement, cells, nets, net_lengths, pins, rows, cols, legal_sites, component_to_nets, total_hpwl, site_to_cell, cell_ids):
     current_placement = placement
     current_site_to_cell = site_to_cell
 
@@ -248,32 +264,38 @@ def run_sa_demo(placement, cells, nets, pins, rows, cols, legal_sites, component
     temperature = 500 * initial_cost
     final_temperature = (5 * 10**-5 * initial_cost) / len(nets)
 
+    cell_costs = calculate_cell_costs(cell_ids, component_to_nets, nets, net_lengths, current_placement)
+    total_cost = sum(cell_costs[cell_id] for cell_id in cell_ids)
+
     while temperature > final_temperature:
         for iteration in range(1, 20 * len(cells)):
 
             first_cell, old_pos, new_pos, cell_on_site = pick_move(
-                current_placement, cells, legal_sites, current_site_to_cell, cell_ids
+                current_placement, cells, legal_sites, current_site_to_cell, cell_ids, cell_costs, total_cost
             )
 
-            changed_cells = [first_cell] if cell_on_site is None else [first_cell, cell_on_site]
+            if cell_on_site is not None:
+                affected_net_ids = set(component_to_nets.get(first_cell, [])) | set(component_to_nets.get(cell_on_site, []))
+            else:
+                affected_net_ids = set(component_to_nets.get(first_cell, []))
 
-            affected_net_ids = set()
-            for cell_id in changed_cells:
-                if cell_id in component_to_nets:
-                    for net_id in component_to_nets[cell_id]:
-                        affected_net_ids.add(net_id)
-
-            old_affected_cost = calculate_affected_hpwl(nets, pins, current_placement, affected_net_ids)
+            old_affected_cost = calculate_affected_hpwl(nets, net_lengths, current_placement, affected_net_ids)
 
             apply_move(current_placement, current_site_to_cell, first_cell, old_pos, new_pos, cell_on_site)
 
-            new_affected_cost = calculate_affected_hpwl(nets, pins, current_placement, affected_net_ids)
+            new_affected_cost = calculate_affected_hpwl(nets, net_lengths, current_placement, affected_net_ids)
 
             new_cost = current_cost - old_affected_cost + new_affected_cost
             cost_change = new_cost - current_cost
 
             if cost_change < 0 or random.random() < math.exp(-cost_change / temperature):
                 current_cost = new_cost
+                delta = new_affected_cost - old_affected_cost
+                cell_costs[first_cell] += delta
+                total_cost += delta
+                if cell_on_site is not None:
+                    cell_costs[cell_on_site] += delta
+                    total_cost += delta
             else:
                 undo_move(current_placement, current_site_to_cell, first_cell, old_pos, new_pos, cell_on_site)
 
@@ -310,12 +332,15 @@ def main():
     for pin_id in pins:
         placement[pin_id] = pins[pin_id]
 
-    total_hpwl = calculate_total_hpwl(nets, pins, placement)
+    net_lengths = [len(net) for net in nets]
+
+    total_hpwl = calculate_total_hpwl(nets, net_lengths, placement)
 
     best_placement, best_cost = run_sa_demo(
         placement,
         cells,
         nets,
+        net_lengths,
         pins,
         rows,
         cols,
@@ -325,6 +350,7 @@ def main():
         site_to_cell,
         cell_ids
     )
+
     print("Total hpwl:", total_hpwl)
     print("Final demo best HPWL:", best_cost)
 
