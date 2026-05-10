@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdlib>
+#include <climits>
 
 using namespace std;
 
@@ -37,7 +38,9 @@ vector<pair<int,int>> legal_sites[4];
 
 vector<int> site_to_cell;
 vector<bool> fixed_site;
-vector<bool> affected_flag;
+
+vector<int> affected_mark;
+int affected_stamp = 1;
 
 int get_random_index(int size) {
     return rng() % size;
@@ -130,6 +133,10 @@ void read_input_file(string filename) {
 }
 
 void make_legal_sites() {
+    for (int type = 0; type < 4; type++) {
+        legal_sites[type].clear();
+    }
+
     for (int y = 1; y < rows - 1; y++) {
         for (int x = 1; x < cols - 1; x++) {
             int type = get_site_type(x, y);
@@ -239,26 +246,38 @@ int calculate_total_hpwl() {
     return total;
 }
 
-vector<int> get_affected_net_ids(vector<int>& changed_cells) {
-    vector<int> affected_net_ids;
+void get_affected_net_ids_fast(
+    int first_cell,
+    int second_cell,
+    vector<int>& affected_net_ids
+) {
+    affected_net_ids.clear();
 
-    for (int cell_id : changed_cells) {
-        for (int net_id : component_to_nets[cell_id]) {
-            if (!affected_flag[net_id]) {
-                affected_flag[net_id] = true;
+    if (affected_stamp == INT_MAX) {
+        fill(affected_mark.begin(), affected_mark.end(), 0);
+        affected_stamp = 1;
+    } else {
+        affected_stamp++;
+    }
+
+    for (int net_id : component_to_nets[first_cell]) {
+        if (affected_mark[net_id] != affected_stamp) {
+            affected_mark[net_id] = affected_stamp;
+            affected_net_ids.push_back(net_id);
+        }
+    }
+
+    if (second_cell != -1) {
+        for (int net_id : component_to_nets[second_cell]) {
+            if (affected_mark[net_id] != affected_stamp) {
+                affected_mark[net_id] = affected_stamp;
                 affected_net_ids.push_back(net_id);
             }
         }
     }
-
-    for (int net_id : affected_net_ids) {
-        affected_flag[net_id] = false;
-    }
-
-    return affected_net_ids;
 }
 
-int calculate_affected_hpwl(vector<int>& affected_net_ids) {
+int calculate_affected_hpwl(const vector<int>& affected_net_ids) {
     int total = 0;
 
     for (int net_id : affected_net_ids) {
@@ -266,12 +285,6 @@ int calculate_affected_hpwl(vector<int>& affected_net_ids) {
     }
 
     return total;
-}
-
-int get_cell_on_site(pair<int,int> pos) {
-    int index = get_site_index(pos);
-
-    return site_to_cell[index];
 }
 
 void apply_move(
@@ -351,7 +364,8 @@ int run_sa(int total_hpwl) {
     double temperature = 500.0 * total_hpwl;
     double final_temperature = (5e-5 * total_hpwl) / num_nets;
 
-    uniform_real_distribution<double> probability(0.0, 1.0);
+    vector<int> affected_net_ids;
+    affected_net_ids.reserve(128);
 
     while (temperature > final_temperature) {
         for (int iteration = 0; iteration < 20 * num_cells; iteration++) {
@@ -371,15 +385,11 @@ int run_sa(int total_hpwl) {
                 continue;
             }
 
-            vector<int> changed_cells;
-
-            changed_cells.push_back(first_cell);
-
-            if (cell_on_site != -1) {
-                changed_cells.push_back(cell_on_site);
-            }
-
-            vector<int> affected_net_ids = get_affected_net_ids(changed_cells);
+            get_affected_net_ids_fast(
+                first_cell,
+                cell_on_site,
+                affected_net_ids
+            );
 
             int old_affected_cost = calculate_affected_hpwl(affected_net_ids);
 
@@ -396,7 +406,9 @@ int run_sa(int total_hpwl) {
 
             int cost_change = new_cost - current_cost;
 
-            if (cost_change < 0 || probability(rng) < exp(-cost_change / temperature)) {
+            double random_value = (double)rng() / (double)rng.max();
+
+            if (cost_change < 0 || random_value < exp(-cost_change / temperature)) {
                 current_cost = new_cost;
 
                 if (current_cost < best_cost) {
@@ -472,11 +484,13 @@ bool verify_placement() {
 }
 
 int main() {
+    cout << "RUNNING parser_step1.cpp WITH FAST AFFECTED NETS" << endl;
+
     string filename = "design_5_extreme.txt";
 
     read_input_file(filename);
 
-    affected_flag.resize(num_nets, false);
+    affected_mark.resize(num_nets, 0);
 
     make_legal_sites();
 
