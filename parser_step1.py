@@ -3,11 +3,18 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <unordered_map>
 #include <random>
 #include <cmath>
 #include <algorithm>
 
 using namespace std;
+
+struct PairHash {
+    size_t operator()(const pair<int,int>& p) const {
+        return hash<int>()(p.first) ^ (hash<int>()(p.second) << 16);
+    }
+};
 
 mt19937 rng(random_device{}());
 
@@ -26,16 +33,16 @@ int MASTER_TILE[5][5] = {
     {0, 0, 0, 0, 0}
 };
 
-map<int, pair<int, int>> placement;
-map<int, int> cell_type;
+unordered_map<int, pair<int, int>> placement;
+unordered_map<int, int> cell_type;
 vector<int> cell_ids;
 
-map<int, vector<int>> nets;
-map<int, vector<int>> component_to_nets;
+unordered_map<int, vector<int>> nets;
+unordered_map<int, vector<int>> component_to_nets;
 
 vector<pair<int, int>> legal_sites[4];
 
-map<pair<int, int>, int> site_to_cell;
+unordered_map<pair<int, int>, int, PairHash> site_to_cell;
 
 int get_random_index(int size) {
     return rng() % size;
@@ -359,6 +366,7 @@ int run_sa(int total_hpwl) {
 }
 
 int main() {
+    cout << "RUNNING parser_step1.cpp NEW VERSION" << endl;
     string filename = "design_5_extreme.txt";
 
     read_input_file(filename);
