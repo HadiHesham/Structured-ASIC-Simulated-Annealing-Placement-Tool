@@ -42,6 +42,8 @@ vector<bool> fixed_site;
 vector<int> affected_mark;
 int affected_stamp = 1;
 
+vector<int> net_hpwl;
+
 int get_random_index(int size) {
     return rng() % size;
 }
@@ -152,12 +154,7 @@ void make_initial_placement() {
 
     for (int type = 0; type < 4; type++) {
         available_sites[type] = legal_sites[type];
-
-        shuffle(
-            available_sites[type].begin(),
-            available_sites[type].end(),
-            rng
-        );
+        shuffle(available_sites[type].begin(), available_sites[type].end(), rng);
     }
 
     int used_count[4] = {0, 0, 0, 0};
@@ -236,6 +233,19 @@ int calculate_net_hpwl(int net_id) {
     return (max_x - min_x) + (max_y - min_y);
 }
 
+int initialize_net_hpwl() {
+    int total = 0;
+
+    net_hpwl.resize(num_nets);
+
+    for (int net_id = 0; net_id < num_nets; net_id++) {
+        net_hpwl[net_id] = calculate_net_hpwl(net_id);
+        total += net_hpwl[net_id];
+    }
+
+    return total;
+}
+
 int calculate_total_hpwl() {
     int total = 0;
 
@@ -275,16 +285,6 @@ void get_affected_net_ids_fast(
             }
         }
     }
-}
-
-int calculate_affected_hpwl(const vector<int>& affected_net_ids) {
-    int total = 0;
-
-    for (int net_id : affected_net_ids) {
-        total += calculate_net_hpwl(net_id);
-    }
-
-    return total;
 }
 
 void apply_move(
@@ -367,6 +367,9 @@ int run_sa(int total_hpwl) {
     vector<int> affected_net_ids;
     affected_net_ids.reserve(128);
 
+    vector<int> new_net_hpwl_values;
+    new_net_hpwl_values.reserve(128);
+
     while (temperature > final_temperature) {
         for (int iteration = 0; iteration < 20 * num_cells; iteration++) {
             int first_cell;
@@ -391,7 +394,11 @@ int run_sa(int total_hpwl) {
                 affected_net_ids
             );
 
-            int old_affected_cost = calculate_affected_hpwl(affected_net_ids);
+            int old_affected_cost = 0;
+
+            for (int net_id : affected_net_ids) {
+                old_affected_cost += net_hpwl[net_id];
+            }
 
             apply_move(
                 first_cell,
@@ -400,7 +407,14 @@ int run_sa(int total_hpwl) {
                 cell_on_site
             );
 
-            int new_affected_cost = calculate_affected_hpwl(affected_net_ids);
+            int new_affected_cost = 0;
+            new_net_hpwl_values.clear();
+
+            for (int net_id : affected_net_ids) {
+                int new_hpwl = calculate_net_hpwl(net_id);
+                new_net_hpwl_values.push_back(new_hpwl);
+                new_affected_cost += new_hpwl;
+            }
 
             int new_cost = current_cost - old_affected_cost + new_affected_cost;
 
@@ -410,6 +424,10 @@ int run_sa(int total_hpwl) {
 
             if (cost_change < 0 || random_value < exp(-cost_change / temperature)) {
                 current_cost = new_cost;
+
+                for (int i = 0; i < (int)affected_net_ids.size(); i++) {
+                    net_hpwl[affected_net_ids[i]] = new_net_hpwl_values[i];
+                }
 
                 if (current_cost < best_cost) {
                     best_cost = current_cost;
@@ -484,7 +502,6 @@ bool verify_placement() {
 }
 
 int main() {
-    cout << "RUNNING parser_step1.cpp WITH FAST AFFECTED NETS" << endl;
 
     string filename = "design_5_extreme.txt";
 
@@ -498,7 +515,7 @@ int main() {
 
     build_site_to_cell();
 
-    int total_hpwl = calculate_total_hpwl();
+    int total_hpwl = initialize_net_hpwl();
 
     int best_cost = run_sa(total_hpwl);
 
