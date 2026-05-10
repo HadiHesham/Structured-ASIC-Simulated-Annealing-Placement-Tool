@@ -2,21 +2,21 @@
 #include <fstream>
 #include <vector>
 #include <string>
-#include <map>
 #include <unordered_map>
 #include <random>
 #include <cmath>
 #include <algorithm>
+#include <cstdlib>
 
 using namespace std;
 
+mt19937 rng(random_device{}());
+
 struct PairHash {
-    size_t operator()(const pair<int,int>& p) const {
+    size_t operator()(const pair<int, int>& p) const {
         return hash<int>()(p.first) ^ (hash<int>()(p.second) << 16);
     }
 };
-
-mt19937 rng(random_device{}());
 
 int num_components;
 int num_nets;
@@ -33,16 +33,21 @@ int MASTER_TILE[5][5] = {
     {0, 0, 0, 0, 0}
 };
 
-unordered_map<int, pair<int, int>> placement;
-unordered_map<int, int> cell_type;
+vector<pair<int, int>> placement;
+vector<pair<int, int>> original_pin_placement;
+vector<int> cell_type;
 vector<int> cell_ids;
-
-unordered_map<int, vector<int>> nets;
-unordered_map<int, vector<int>> component_to_nets;
-
+vector<int> pin_ids;
+vector<vector<int>> nets;
+vector<vector<int>> component_to_nets;
 vector<pair<int, int>> legal_sites[4];
 
+vector<bool> is_pin;
+vector<bool> is_cell;
+vector<bool> affected_flag;
+
 unordered_map<pair<int, int>, int, PairHash> site_to_cell;
+unordered_map<pair<int, int>, int, PairHash> fixed_pin_site;
 
 int get_random_index(int size) {
     return rng() % size;
@@ -64,6 +69,14 @@ void read_input_file(string filename) {
     file >> cols;
     file >> num_pins;
 
+    placement.resize(num_components);
+    original_pin_placement.resize(num_components);
+    cell_type.resize(num_components);
+    nets.resize(num_nets);
+    component_to_nets.resize(num_components);
+    is_pin.resize(num_components, false);
+    is_cell.resize(num_components, false);
+
     for (int i = 0; i < num_pins; i++) {
         int pin_id;
         int x;
@@ -76,6 +89,10 @@ void read_input_file(string filename) {
         file >> p;
 
         placement[pin_id] = {x, y};
+        original_pin_placement[pin_id] = {x, y};
+        pin_ids.push_back(pin_id);
+        is_pin[pin_id] = true;
+        fixed_pin_site[{x, y}] = pin_id;
     }
 
     num_cells = num_components - num_pins;
@@ -91,6 +108,7 @@ void read_input_file(string filename) {
 
         cell_type[cell_id] = type;
         cell_ids.push_back(cell_id);
+        is_cell[cell_id] = true;
     }
 
     for (int net_id = 0; net_id < num_nets; net_id++) {
@@ -118,29 +136,240 @@ void make_legal_sites() {
     }
 }
 
-void make_initial_placement() {
-    vector<pair<int, int>> available_sites[4];
+int get_cell_connectivity_score(int cell_id) {
+    int score = 0;
 
-    for (int type = 0; type < 4; type++) {
-        available_sites[type] = legal_sites[type];
+    for (int net_id : component_to_nets[cell_id]) {
+        int net_size = nets[net_id].size();
 
-        shuffle(
-            available_sites[type].begin(),
-            available_sites[type].end(),
-            rng
-        );
+        score += net_size;
+
+        for (int component_id : nets[net_id]) {
+            if (is_pin[component_id]) {
+                score += 30;
+            }
+
+            if (is_cell[component_id] && component_id != cell_id) {
+                score += 5;
+            }
+        }
     }
 
-    int used_count[4] = {0, 0, 0, 0};
+    return score;
+}
 
-    for (int cell_id : cell_ids) {
+pair<double, double> get_initial_target_position(int cell_id, vector<bool>& component_is_placed) {
+    double total_x = 0.0;
+    double total_y = 0.0;
+    double total_weight = 0.0;
+
+    for (int net_id : component_to_nets[cell_id]) {
+        int net_size = nets[net_id].size();
+
+        double base_weight = 1.0 / max(1, net_size - 1);
+
+        for (int component_id : nets[net_id]) {
+            if (component_id == cell_id) {
+                continue;
+            }
+
+            if (component_is_placed[component_id]) {
+                double weight = base_weight;
+
+                if (is_pin[component_id]) {
+                    weight *= 4.0;
+                }
+
+                total_x += weight * placement[component_id].first;
+                total_y += weight * placement[component_id].second;
+                total_weight += weight;
+            }
+        }
+    }
+
+    if (total_weight > 0.0) {
+        return {total_x / total_weight, total_y / total_weight};
+    }
+
+    return {(cols - 1) / 2.0, (rows - 1) / 2.0};
+}
+
+pair<double, double> get_current_target_position(int cell_id) {
+    double total_x = 0.0;
+    double total_y = 0.0;
+    double total_weight = 0.0;
+
+    for (int net_id : component_to_nets[cell_id]) {
+        int net_size = nets[net_id].size();
+
+        double base_weight = 1.0 / max(1, net_size - 1);
+
+        for (int component_id : nets[net_id]) {
+            if (component_id == cell_id) {
+                continue;
+            }
+
+            double weight = base_weight;
+
+            if (is_pin[component_id]) {
+                weight *= 4.0;
+            }
+
+            total_x += weight * placement[component_id].first;
+            total_y += weight * placement[component_id].second;
+            total_weight += weight;
+        }
+    }
+
+    if (total_weight > 0.0) {
+        return {total_x / total_weight, total_y / total_weight};
+    }
+
+    return {(cols - 1) / 2.0, (rows - 1) / 2.0};
+}
+
+pair<int, int> find_nearest_free_legal_site(int type, pair<double, double> target) {
+    double best_distance = 1e100;
+    pair<int, int> best_site = {-1, -1};
+
+    for (pair<int, int> site : legal_sites[type]) {
+        if (site_to_cell.count(site)) {
+            continue;
+        }
+
+        if (fixed_pin_site.count(site)) {
+            continue;
+        }
+
+        double dx = site.first - target.first;
+        double dy = site.second - target.second;
+        double distance = dx * dx + dy * dy;
+
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_site = site;
+        }
+    }
+
+    return best_site;
+}
+
+vector<pair<int, int>> get_near_target_sites(
+    int type,
+    pair<double, double> target,
+    pair<int, int> old_pos,
+    int limit
+) {
+    vector<pair<double, pair<int, int>>> scored_sites;
+
+    for (pair<int, int> site : legal_sites[type]) {
+        if (site == old_pos) {
+            continue;
+        }
+
+        if (fixed_pin_site.count(site)) {
+            continue;
+        }
+
+        double dx = site.first - target.first;
+        double dy = site.second - target.second;
+        double distance = dx * dx + dy * dy;
+
+        scored_sites.push_back({distance, site});
+    }
+
+    sort(
+        scored_sites.begin(),
+        scored_sites.end(),
+        [](const pair<double, pair<int, int>>& a, const pair<double, pair<int, int>>& b) {
+            return a.first < b.first;
+        }
+    );
+
+    vector<pair<int, int>> result;
+
+    int count = min(limit, (int)scored_sites.size());
+
+    for (int i = 0; i < count; i++) {
+        result.push_back(scored_sites[i].second);
+    }
+
+    return result;
+}
+
+pair<int, int> choose_near_target_site(
+    int type,
+    pair<double, double> target,
+    pair<int, int> old_pos
+) {
+    vector<pair<int, int>> candidates = get_near_target_sites(type, target, old_pos, 30);
+
+    if (candidates.empty()) {
+        return old_pos;
+    }
+
+    return candidates[get_random_index(candidates.size())];
+}
+
+pair<int, int> choose_random_legal_site(int type, pair<int, int> old_pos) {
+    for (int attempt = 0; attempt < 100; attempt++) {
+        pair<int, int> site = legal_sites[type][get_random_index(legal_sites[type].size())];
+
+        if (site == old_pos) {
+            continue;
+        }
+
+        if (fixed_pin_site.count(site)) {
+            continue;
+        }
+
+        return site;
+    }
+
+    return old_pos;
+}
+
+void make_initial_placement() {
+    site_to_cell.clear();
+
+    vector<bool> component_is_placed(num_components, false);
+
+    for (int pin_id : pin_ids) {
+        component_is_placed[pin_id] = true;
+    }
+
+    vector<int> ordered_cells = cell_ids;
+
+    sort(
+        ordered_cells.begin(),
+        ordered_cells.end(),
+        [](int a, int b) {
+            int score_a = get_cell_connectivity_score(a);
+            int score_b = get_cell_connectivity_score(b);
+
+            if (score_a != score_b) {
+                return score_a > score_b;
+            }
+
+            return a < b;
+        }
+    );
+
+    for (int cell_id : ordered_cells) {
         int type = cell_type[cell_id];
 
-        int site_number = used_count[type];
+        pair<double, double> target = get_initial_target_position(cell_id, component_is_placed);
 
-        placement[cell_id] = available_sites[type][site_number];
+        pair<int, int> chosen_site = find_nearest_free_legal_site(type, target);
 
-        used_count[type]++;
+        if (chosen_site.first == -1) {
+            cout << "ERROR: No legal site available for cell " << cell_id << endl;
+            exit(1);
+        }
+
+        placement[cell_id] = chosen_site;
+        site_to_cell[chosen_site] = cell_id;
+        component_is_placed[cell_id] = true;
     }
 }
 
@@ -148,67 +377,52 @@ void build_site_to_cell() {
     site_to_cell.clear();
 
     for (int cell_id : cell_ids) {
-        pair<int, int> position = placement[cell_id];
-
-        site_to_cell[position] = cell_id;
+        site_to_cell[placement[cell_id]] = cell_id;
     }
 }
 
 int calculate_net_hpwl(int net_id) {
-    int first_component = nets[net_id][0];
+    int first = nets[net_id][0];
 
-    int x = placement[first_component].first;
-    int y = placement[first_component].second;
+    int min_x = placement[first].first;
+    int max_x = min_x;
+    int min_y = placement[first].second;
+    int max_y = min_y;
 
-    int smallest_x = x;
-    int biggest_x = x;
-    int smallest_y = y;
-    int biggest_y = y;
-
-    for (int i = 1; i < nets[net_id].size(); i++) {
+    for (int i = 1; i < (int)nets[net_id].size(); i++) {
         int component_id = nets[net_id][i];
 
-        x = placement[component_id].first;
-        y = placement[component_id].second;
+        int x = placement[component_id].first;
+        int y = placement[component_id].second;
 
-        if (x < smallest_x) {
-            smallest_x = x;
+        if (x < min_x) {
+            min_x = x;
         }
 
-        if (x > biggest_x) {
-            biggest_x = x;
+        if (x > max_x) {
+            max_x = x;
         }
 
-        if (y < smallest_y) {
-            smallest_y = y;
+        if (y < min_y) {
+            min_y = y;
         }
 
-        if (y > biggest_y) {
-            biggest_y = y;
+        if (y > max_y) {
+            max_y = y;
         }
     }
 
-    return biggest_x - smallest_x + biggest_y - smallest_y;
+    return (max_x - min_x) + (max_y - min_y);
 }
 
 int calculate_total_hpwl() {
     int total = 0;
 
     for (int net_id = 0; net_id < num_nets; net_id++) {
-        total = total + calculate_net_hpwl(net_id);
+        total += calculate_net_hpwl(net_id);
     }
 
     return total;
-}
-
-void add_unique(vector<int>& values, int new_value) {
-    for (int value : values) {
-        if (value == new_value) {
-            return;
-        }
-    }
-
-    values.push_back(new_value);
 }
 
 vector<int> get_affected_net_ids(vector<int>& changed_cells) {
@@ -216,8 +430,15 @@ vector<int> get_affected_net_ids(vector<int>& changed_cells) {
 
     for (int cell_id : changed_cells) {
         for (int net_id : component_to_nets[cell_id]) {
-            add_unique(affected_net_ids, net_id);
+            if (!affected_flag[net_id]) {
+                affected_flag[net_id] = true;
+                affected_net_ids.push_back(net_id);
+            }
         }
+    }
+
+    for (int net_id : affected_net_ids) {
+        affected_flag[net_id] = false;
     }
 
     return affected_net_ids;
@@ -227,7 +448,7 @@ int calculate_affected_hpwl(vector<int>& affected_net_ids) {
     int total = 0;
 
     for (int net_id : affected_net_ids) {
-        total = total + calculate_net_hpwl(net_id);
+        total += calculate_net_hpwl(net_id);
     }
 
     return total;
@@ -264,42 +485,167 @@ void undo_move(
     );
 }
 
+int get_cell_on_site(pair<int, int> pos) {
+    auto it = site_to_cell.find(pos);
+
+    if (it == site_to_cell.end()) {
+        return -1;
+    }
+
+    return it->second;
+}
+
+int calculate_move_delta(int first_cell, pair<int, int> new_pos) {
+    pair<int, int> old_pos = placement[first_cell];
+
+    if (new_pos == old_pos) {
+        return 0;
+    }
+
+    int cell_on_site = get_cell_on_site(new_pos);
+
+    if (cell_on_site == first_cell) {
+        return 0;
+    }
+
+    vector<int> changed_cells;
+
+    changed_cells.push_back(first_cell);
+
+    if (cell_on_site != -1) {
+        changed_cells.push_back(cell_on_site);
+    }
+
+    vector<int> affected_net_ids = get_affected_net_ids(changed_cells);
+
+    int old_affected_cost = calculate_affected_hpwl(affected_net_ids);
+
+    apply_move(
+        first_cell,
+        old_pos,
+        new_pos,
+        cell_on_site
+    );
+
+    int new_affected_cost = calculate_affected_hpwl(affected_net_ids);
+
+    undo_move(
+        first_cell,
+        old_pos,
+        new_pos,
+        cell_on_site
+    );
+
+    return new_affected_cost - old_affected_cost;
+}
+
 void pick_move(
     int& first_cell,
     pair<int, int>& old_pos,
     pair<int, int>& new_pos,
     int& cell_on_site
 ) {
-    int random_cell_index = get_random_index(cell_ids.size());
+    uniform_real_distribution<double> move_choice(0.0, 1.0);
 
-    first_cell = cell_ids[random_cell_index];
+    first_cell = cell_ids[get_random_index(cell_ids.size())];
 
     int type = cell_type[first_cell];
 
-    int random_site_index = get_random_index(legal_sites[type].size());
-
-    new_pos = legal_sites[type][random_site_index];
-
     old_pos = placement[first_cell];
 
-    if (site_to_cell.count(new_pos)) {
-        cell_on_site = site_to_cell[new_pos];
+    if (move_choice(rng) < 0.75) {
+        pair<double, double> target = get_current_target_position(first_cell);
+        new_pos = choose_near_target_site(type, target, old_pos);
     } else {
-        cell_on_site = -1;
+        new_pos = choose_random_legal_site(type, old_pos);
     }
+
+    cell_on_site = get_cell_on_site(new_pos);
+}
+
+int greedy_polish(int current_cost) {
+    vector<int> ordered_cells = cell_ids;
+
+    sort(
+        ordered_cells.begin(),
+        ordered_cells.end(),
+        [](int a, int b) {
+            int score_a = get_cell_connectivity_score(a);
+            int score_b = get_cell_connectivity_score(b);
+
+            if (score_a != score_b) {
+                return score_a > score_b;
+            }
+
+            return a < b;
+        }
+    );
+
+    for (int pass = 0; pass < 5; pass++) {
+        bool improved = false;
+
+        for (int cell_id : ordered_cells) {
+            int type = cell_type[cell_id];
+
+            pair<int, int> old_pos = placement[cell_id];
+
+            pair<double, double> target = get_current_target_position(cell_id);
+
+            vector<pair<int, int>> candidates = get_near_target_sites(
+                type,
+                target,
+                old_pos,
+                20
+            );
+
+            int best_delta = 0;
+            pair<int, int> best_site = old_pos;
+
+            for (pair<int, int> candidate_site : candidates) {
+                int delta = calculate_move_delta(cell_id, candidate_site);
+
+                if (delta < best_delta) {
+                    best_delta = delta;
+                    best_site = candidate_site;
+                }
+            }
+
+            if (best_delta < 0) {
+                int cell_on_site = get_cell_on_site(best_site);
+
+                apply_move(
+                    cell_id,
+                    old_pos,
+                    best_site,
+                    cell_on_site
+                );
+
+                current_cost += best_delta;
+                improved = true;
+            }
+        }
+
+        if (!improved) {
+            break;
+        }
+    }
+
+    return current_cost;
 }
 
 int run_sa(int total_hpwl) {
     int current_cost = total_hpwl;
     int best_cost = current_cost;
 
-    double temperature = 500.0 * total_hpwl;
+    vector<pair<int, int>> best_placement = placement;
+
+    double temperature = 10.0 * total_hpwl;
     double final_temperature = (5e-5 * total_hpwl) / num_nets;
 
     uniform_real_distribution<double> probability(0.0, 1.0);
 
     while (temperature > final_temperature) {
-        int moves_per_temperature = 20 * num_cells;
+        int moves_per_temperature = 40 * num_cells;
 
         for (int iteration = 0; iteration < moves_per_temperature; iteration++) {
             int first_cell;
@@ -345,6 +691,11 @@ int run_sa(int total_hpwl) {
 
             if (cost_change < 0 || probability(rng) < exp(-cost_change / temperature)) {
                 current_cost = new_cost;
+
+                if (current_cost < best_cost) {
+                    best_cost = current_cost;
+                    best_placement = placement;
+                }
             } else {
                 undo_move(
                     first_cell,
@@ -353,23 +704,68 @@ int run_sa(int total_hpwl) {
                     cell_on_site
                 );
             }
-
-            if (current_cost < best_cost) {
-                best_cost = current_cost;
-            }
         }
 
-        temperature = temperature * 0.95;
+        temperature *= 0.97;
     }
+
+    placement = best_placement;
+
+    build_site_to_cell();
+
+    best_cost = greedy_polish(best_cost);
+
+    build_site_to_cell();
 
     return best_cost;
 }
 
+bool verify_placement() {
+    unordered_map<pair<int, int>, int, PairHash> seen;
+
+    for (int pin_id : pin_ids) {
+        if (placement[pin_id] != original_pin_placement[pin_id]) {
+            cout << "ERROR: Pin " << pin_id << " moved" << endl;
+            return false;
+        }
+
+        seen[placement[pin_id]] = pin_id;
+    }
+
+    for (int cell_id : cell_ids) {
+        pair<int, int> pos = placement[cell_id];
+
+        if (seen.count(pos)) {
+            cout << "ERROR: Cell " << cell_id << " overlaps with component " << seen[pos] << endl;
+            return false;
+        }
+
+        seen[pos] = cell_id;
+
+        if (pos.first <= 0 || pos.first >= cols - 1 || pos.second <= 0 || pos.second >= rows - 1) {
+            cout << "ERROR: Cell " << cell_id << " is outside legal area" << endl;
+            return false;
+        }
+
+        int actual_type = get_site_type(pos.first, pos.second);
+
+        if (actual_type != cell_type[cell_id]) {
+            cout << "ERROR: Cell " << cell_id << " is on wrong site type" << endl;
+            return false;
+        }
+    }
+
+    cout << "Placement is VALID" << endl;
+
+    return true;
+}
+
 int main() {
-    cout << "RUNNING parser_step1.cpp NEW VERSION" << endl;
     string filename = "design_5_extreme.txt";
 
     read_input_file(filename);
+
+    affected_flag.resize(num_nets, false);
 
     make_legal_sites();
 
@@ -377,11 +773,18 @@ int main() {
 
     build_site_to_cell();
 
+    cout << "Initial net-aware placement check:" << endl;
+    verify_placement();
+
     int total_hpwl = calculate_total_hpwl();
 
     int best_cost = run_sa(total_hpwl);
 
-    cout << "File read successfully" << endl;
+    cout << "Final placement check:" << endl;
+    verify_placement();
+
+    int final_real_hpwl = calculate_total_hpwl();
+
     cout << "Input file: " << filename << endl;
     cout << "Number of components: " << num_components << endl;
     cout << "Number of nets: " << num_nets << endl;
@@ -389,8 +792,9 @@ int main() {
     cout << "Grid cols: " << cols << endl;
     cout << "Number of pins: " << num_pins << endl;
     cout << "Number of movable cells: " << num_cells << endl;
-    cout << "Initial total HPWL: " << total_hpwl << endl;
+    cout << "Initial net-aware HPWL: " << total_hpwl << endl;
     cout << "Final best HPWL: " << best_cost << endl;
+    cout << "Verified final HPWL: " << final_real_hpwl << endl;
 
     return 0;
 }
