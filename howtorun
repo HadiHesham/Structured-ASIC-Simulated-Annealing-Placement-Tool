@@ -1,0 +1,3 @@
+g++ -O3 -march=native -DNDEBUG parser_step1.cpp -o single_placer
+g++ -O3 -march=native -DNDEBUG run3.cpp -o run3
+time ./run3
