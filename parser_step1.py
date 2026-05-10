@@ -161,32 +161,12 @@ void make_initial_placement() {
 
     for (int cell_id : cell_ids) {
         int type = cell_type[cell_id];
-        bool placed = false;
 
-        while (used_count[type] < (int)available_sites[type].size()) {
-            pair<int,int> site = available_sites[type][used_count[type]];
-            used_count[type]++;
+        placement[cell_id] = available_sites[type][used_count[type]];
 
-            int index = get_site_index(site);
+        site_to_cell[get_site_index(placement[cell_id])] = cell_id;
 
-            if (fixed_site[index]) {
-                continue;
-            }
-
-            if (site_to_cell[index] != -1) {
-                continue;
-            }
-
-            placement[cell_id] = site;
-            site_to_cell[index] = cell_id;
-            placed = true;
-            break;
-        }
-
-        if (!placed) {
-            cout << "ERROR: No legal site available for cell " << cell_id << endl;
-            exit(1);
-        }
+        used_count[type]++;
     }
 }
 
