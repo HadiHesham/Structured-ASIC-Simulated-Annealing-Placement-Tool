@@ -472,8 +472,6 @@ bool verify_placement() {
 }
 
 int main() {
-    cout << "RUNNING parser_step1.cpp WITH GRID OCCUPANCY" << endl;
-
     string filename = "design_5_extreme.txt";
 
     read_input_file(filename);
@@ -490,19 +488,8 @@ int main() {
 
     int best_cost = run_sa(total_hpwl);
 
-    int verified_final_hpwl = calculate_total_hpwl();
-
-    cout << "File read successfully" << endl;
-    cout << "Input file: " << filename << endl;
-    cout << "Number of components: " << num_components << endl;
-    cout << "Number of nets: " << num_nets << endl;
-    cout << "Grid rows: " << rows << endl;
-    cout << "Grid cols: " << cols << endl;
-    cout << "Number of pins: " << num_pins << endl;
-    cout << "Number of movable cells: " << num_cells << endl;
     cout << "Initial total HPWL: " << total_hpwl << endl;
     cout << "Final best HPWL: " << best_cost << endl;
-    cout << "Verified final HPWL: " << verified_final_hpwl << endl;
 
     verify_placement();
 
